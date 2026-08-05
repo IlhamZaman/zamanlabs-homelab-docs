@@ -22,3 +22,4 @@ The uploaded files were reorganized as follows. Source wording was preserved whe
 | `STEP 15 Hermes Agent Setup.txt` | [`ai/hermes-agent/hermes-agent-setup.md`](../ai/hermes-agent/hermes-agent-setup.md) | Included and converted to Markdown |
 | `STEP 16 - Self-Hosted Honcho Memory for Hermes (Canonical).txt` | [`ai/hermes-agent/self-hosted-honcho-memory.md`](../ai/hermes-agent/self-hosted-honcho-memory.md) | Included and converted to Markdown |
 | `STEP-17-HOGWARTS-SPELLS-ENCHANTMENTS-AND-TERMINOLOGY.txt` | [`ai/hogwarts/spells-enchantments-and-terminology.md`](../ai/hogwarts/spells-enchantments-and-terminology.md) | Included and converted to Markdown |
+| `STEP 18 Proxmox and VM Firewall Configuration.txt` | [`proxmox/proxmox-and-vm-firewall-configuration.md`](../proxmox/proxmox-and-vm-firewall-configuration.md) | Included and converted to Markdown |
