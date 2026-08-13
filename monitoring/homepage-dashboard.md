@@ -1,6 +1,7 @@
 <!--
 Organized from: STEP 10 Homepage Dashboard Setup(2).txt
 Source wording and technical details were preserved as closely as possible.
+Updated 2026-08-12 after resolving Homepage 1.13.1 / TrueNAS SCALE 25.10.4 API authentication.
 -->
 
 > [!CAUTION]
@@ -8,7 +9,7 @@ Source wording and technical details were preserved as closely as possible.
 
 ## STEP 10 Homepage Dashboard Setup
 
-This step covers setting up Homepage on the existing Fedora Uptime Kuma VM, customizing the dashboard style, adding service cards, removing default bookmark sections, adding icons, and adding Proxmox/TrueNAS widgets.
+This step covers setting up Homepage on the existing Fedora Uptime Kuma VM, customizing the dashboard style, adding service cards, removing default bookmark sections, adding icons, and adding Proxmox/TrueNAS widgets. It also documents the current secure TrueNAS API configuration using HTTPS and a protected systemd environment file.
 
 ---
 # 1. What Homepage Is For
@@ -106,6 +107,30 @@ Find the Fedora VM IP:
 ip a
 ```
 
+Create a protected directory for Homepage secrets:
+
+```text
+sudo install -d -m 700 -o root -g root /etc/homepage
+```
+
+Create the Homepage environment file:
+
+```text
+sudo install -m 600 -o root -g root /dev/null /etc/homepage/homepage.env
+```
+
+Verify the permissions:
+
+```text
+sudo stat -c '%A %a %U:%G %n' /etc/homepage/homepage.env
+```
+
+Expected:
+
+```text
+-rw------- 600 root:root /etc/homepage/homepage.env
+```
+
 Create the systemd service:
 
 ```text
@@ -114,36 +139,37 @@ sudo nano /etc/systemd/system/homepage.service
 
 Example service file:
 
-```text
+```ini
 [Unit]
 Description=Homepage Dashboard
 After=network.target
-```
 
-```text
 [Service]
 Type=simple
 User=homepage
 Group=homepage
 WorkingDirectory=/opt/homepage/app
 Environment=HOMEPAGE_ALLOWED_HOSTS=YOUR-FEDORA-VM-IP:3000,localhost:3000,127.0.0.1:3000
+EnvironmentFile=/etc/homepage/homepage.env
 ExecStart=/usr/local/bin/pnpm start
 Restart=always
 RestartSec=10
-```
 
-```text
 [Install]
 WantedBy=multi-user.target
 ```
 
-Replace YOUR-FEDORA-VM-IP with the real IP address of the Fedora VM.
+Replace `YOUR-FEDORA-VM-IP` with the real IP address of the Fedora VM.
+
+The `EnvironmentFile` line allows Homepage secrets to be kept outside the normal YAML configuration. The environment file is root-owned and mode `0600` so it is not readable by normal local users.
 
 Save the file:
 
+```text
 CTRL + O
 ENTER
 CTRL + X
+```
 
 Enable and start Homepage:
 
@@ -193,15 +219,17 @@ Main files used:
 /opt/homepage/app/config/services.yaml
 /opt/homepage/app/config/widgets.yaml
 /opt/homepage/app/config/bookmarks.yaml
+/etc/homepage/homepage.env
 ```
 
 What each file does:
 
 ```text
-settings.yaml  = Theme, background, blur, card style, layout columns
-services.yaml  = Main service cards and service widgets
-widgets.yaml   = Top widgets like date, weather, search, local resources
-bookmarks.yaml = Bookmark sections like Developer, Social, Entertainment
+settings.yaml              = Theme, background, blur, card style, layout columns
+services.yaml              = Main service cards and service widgets
+widgets.yaml               = Top widgets like date, weather, search, local resources
+bookmarks.yaml             = Bookmark sections like Developer, Social, Entertainment
+/etc/homepage/homepage.env = Protected Homepage environment secrets
 ```
 
 Important note:
@@ -719,46 +747,130 @@ For storage monitoring, the better option is to use the TrueNAS widget, since th
 ---
 ## 16. Creating a TrueNAS API Key
 
-In TrueNAS SCALE:
+The current TrueNAS integration uses the Homepage TrueNAS widget with:
 
-## 1. Open TrueNAS in the browser:
+```yaml
+version: 2
+```
 
-http://YOUR-TRUENAS-IP
+For TrueNAS 25.04 and later, Homepage uses the newer WebSocket API when `version: 2` is configured.
 
-## 2. Click the user/profile icon in the top-right.
+### Create the key in TrueNAS SCALE
 
-## 3. Click:
+1. Open TrueNAS over HTTPS:
 
+```text
+https://YOUR-TRUENAS-IP
+```
+
+2. Open the user/profile menu in the top-right.
+3. Select:
+
+```text
 My API Keys
+```
 
 Alternative path:
 
+```text
 Credentials > Users > select user > View API Keys
+```
 
-## 4. Click:
+4. Click **Add API Key**.
+5. Give the key a descriptive name such as:
 
-Add API Key
-
-## 5. Name it:
-
+```text
 homepage
+```
 
-## 6. Pick the user account the key belongs to.
+6. Select the user account the key belongs to.
+7. Leave **Non-expiring** enabled unless an expiration is specifically wanted.
+8. Save.
+9. Copy the generated API key immediately. TrueNAS does not allow the same key string to be viewed again after the dialog is closed.
 
-## 7. Leave Non-expiring enabled unless an expiration is wanted.
+> [!IMPORTANT]
+> A TrueNAS user-linked API key provides password-equivalent API access as its associated user and is not protected by that user's 2FA configuration. Treat the key as a secret.
 
-## 8. Save.
+> [!WARNING]
+> TrueNAS 25.10 requires HTTPS for API-key authentication. If a user-linked API key is submitted during an authentication attempt over insecure HTTP, TrueNAS revokes it. A revoked key must be reset, which generates a new key string.
 
-## 9. Copy the API key immediately. TrueNAS only shows it one time.
+Do not configure the Homepage TrueNAS widget with:
 
-Important:
+```yaml
+url: http://YOUR-TRUENAS-IP
+```
 
-A TrueNAS API key acts like password-level access for that user and is not protected by the user's 2FA. Keep it private.
+Use HTTPS:
+
+```yaml
+url: https://YOUR-TRUENAS-IP
+```
 
 ---
-## 17. Adding the TrueNAS Widget
+## 17. Storing the TrueNAS API Key Securely
 
-Open services.yaml:
+Do not store the live TrueNAS API key directly in:
+
+```text
+/opt/homepage/app/config/services.yaml
+```
+
+The Homepage configuration file can be readable by users who should not have access to the API key. The current setup stores the key in the protected environment file created earlier:
+
+```text
+/etc/homepage/homepage.env
+```
+
+Stop Homepage before rotating or replacing the TrueNAS key:
+
+```text
+sudo systemctl stop homepage.service
+```
+
+Open the environment file:
+
+```text
+sudo nano /etc/homepage/homepage.env
+```
+
+Add the key:
+
+```ini
+HOMEPAGE_VAR_TRUENAS_KEY=REDACTED
+```
+
+Do not put the real key in this repository.
+
+Verify the environment file permissions:
+
+```text
+sudo stat -c '%A %a %U:%G %n' /etc/homepage/homepage.env
+```
+
+Expected:
+
+```text
+-rw------- 600 root:root /etc/homepage/homepage.env
+```
+
+The systemd unit must contain:
+
+```ini
+EnvironmentFile=/etc/homepage/homepage.env
+```
+
+Reload systemd after changing the service unit:
+
+```text
+sudo systemctl daemon-reload
+```
+
+Homepage supports environment-secret substitution for variables beginning with `HOMEPAGE_VAR_`. The TrueNAS widget references the environment variable instead of containing the API key itself.
+
+---
+## 18. Adding the TrueNAS Widget
+
+Open `services.yaml`:
 
 ```text
 sudo nano /opt/homepage/app/config/services.yaml
@@ -766,34 +878,221 @@ sudo nano /opt/homepage/app/config/services.yaml
 
 Example TrueNAS card:
 
+```yaml
 - Infrastructure:
     - TrueNAS:
         icon: truenas.png
-        href: http://YOUR-TRUENAS-IP
+        href: https://YOUR-TRUENAS-IP
         description: NAS storage
         widget:
           type: truenas
-          url: http://YOUR-TRUENAS-IP
-          key: YOUR_TRUENAS_API_KEY
+          url: https://YOUR-TRUENAS-IP
+          version: 2
+          key: "{{HOMEPAGE_VAR_TRUENAS_KEY}}"
           enablePools: true
+```
 
 Replace:
 
+```text
 YOUR-TRUENAS-IP
-YOUR_TRUENAS_API_KEY
+```
 
-Restart:
+Do **not** replace `{{HOMEPAGE_VAR_TRUENAS_KEY}}` with the literal API key. Homepage replaces that reference with the value loaded from the protected environment file.
+
+Start or restart Homepage:
 
 ```text
-sudo systemctl restart homepage
+sudo systemctl restart homepage.service
+```
+
+Check the service:
+
+```text
+systemctl status homepage.service --no-pager
 ```
 
 ---
-## 18. Example Full services.yaml Structure
+## 19. TrueNAS Widget Authentication Troubleshooting
 
-This structure matches the final settings.yaml layout groups:
+### Resolved 2026-08-12
+
+Affected systems during the incident:
+
+```text
+Homepage: 1.13.1 on kuma-homepage / 192.168.1.226
+TrueNAS SCALE: 25.10.4 on 192.168.1.253
+```
+
+The TrueNAS service card showed a green status indicator, but the widget could not authenticate.
+
+Homepage logs showed:
+
+```text
+TrueNAS API key [REDACTED] failed
+Websocket call for TrueNAS failed: TrueNAS authentication failed
+```
+
+The green service status did not prove that widget authentication was working. It only showed that the separate service/ping check could reach TrueNAS.
+
+### Root cause 1: HTTP was used for API-key authentication
+
+The widget originally used:
+
+```yaml
+url: http://192.168.1.253
+```
+
+while also using a user-linked API key.
+
+For TrueNAS 25.10, API-key authentication must use HTTPS. An API key submitted over HTTP can be revoked automatically.
+
+The widget URL was corrected to:
+
+```yaml
+url: https://192.168.1.253
+```
+
+and the v2 widget configuration was retained:
+
+```yaml
+version: 2
+```
+
+### Root cause 2: the API key was stored directly in `services.yaml`
+
+The key was originally stored directly in:
+
+```text
+/opt/homepage/app/config/services.yaml
+```
+
+The file was mode `0644`, so the key was treated as exposed and replaced.
+
+The replacement key was moved to:
+
+```text
+/etc/homepage/homepage.env
+```
+
+with:
+
+```text
+root:root
+0600
+```
+
+### Intermediate failure: Homepage loaded the secret but the widget did not reference it
+
+A read-only verification showed:
+
+```text
+HTTPS: correct
+version: 2: correct
+HOMEPAGE_VAR_TRUENAS_KEY: loaded and non-empty
+homepage.service: active
+```
+
+but the TrueNAS widget was still missing:
+
+```yaml
+key: "{{HOMEPAGE_VAR_TRUENAS_KEY}}"
+```
+
+Without that `key:` line, Homepage had the secret in its process environment but the TrueNAS widget was not told to use it.
+
+After adding the line, the configuration structure was correct.
+
+### Final failure: TrueNAS still rejected the old/revoked key
+
+After HTTPS, `version: 2`, the environment file, and the `key:` reference were all correct, Homepage still logged:
+
+```text
+Websocket call for TrueNAS failed: TrueNAS authentication failed
+```
+
+The TrueNAS API key itself was then reset/replaced and the new value was stored in:
+
+```text
+/etc/homepage/homepage.env
+```
+
+Homepage was restarted.
+
+The final read-only check reported:
+
+```text
+PASS — fixed.
+homepage.service: active
+No TrueNAS widget errors in the last two minutes
+No recent authentication failures detected
+```
+
+### Key-length troubleshooting note
+
+A diagnostic check of the value loaded into the running Homepage process reported:
+
+```text
+Loaded key length: 66
+```
+
+The widget was nevertheless authenticating successfully and the logs were clean.
+
+Do not trim, rewrite, or reset a working API key solely because a diagnostic character count differs from an expected value. Successful authentication and clean current logs are the operational validation that matters for this setup.
+
+### Safe validation commands
+
+Check Homepage:
+
+```text
+systemctl is-active homepage.service
+```
+
+Check recent logs:
+
+```text
+sudo journalctl -u homepage.service --since "2 minutes ago" --no-pager
+```
+
+Filter for likely TrueNAS/authentication errors:
+
+```text
+sudo journalctl -u homepage.service --since "2 minutes ago" --no-pager \
+  | grep -iE 'truenas|websocket|auth|error'
+```
+
+Test HTTPS connectivity to TrueNAS:
+
+```text
+curl -vkI https://YOUR-TRUENAS-IP/
+```
+
+`-k` is only for this manual connectivity test when the TrueNAS certificate is self-signed or otherwise not trusted by the local certificate store. Do not switch the Homepage widget back to HTTP to work around a certificate problem.
+
+Verify the protected environment file without displaying the secret:
+
+```text
+sudo stat -c '%A %a %U:%G %n' /etc/homepage/homepage.env
+```
+
+Check whether the running Homepage process has the variable without printing the key:
+
+```text
+pid=$(systemctl show -p MainPID --value homepage.service)
+
+sudo tr '\0' '
+' < /proc/$pid/environ \
+  | awk '/^HOMEPAGE_VAR_TRUENAS_KEY=/{sub(/^[^=]*=/,""); print "Loaded key length:", length($0)}'
+```
+
+Do not paste the API key into shell output, logs, screenshots, GitHub issues, or this repository.
 
 ---
+## 20. Example Full services.yaml Structure
+
+This structure matches the final `settings.yaml` layout groups and uses the secure TrueNAS API configuration:
+
+```yaml
 - System:
     - Proxmox VE:
         icon: proxmox.png
@@ -819,13 +1118,10 @@ This structure matches the final settings.yaml layout groups:
         ping: http://YOUR-FEDORA-VM-IP:3001
 
     - Homepage:
-
-```text
         icon: homepage.png
         href: http://YOUR-FEDORA-VM-IP:3000
         description: Homelab dashboard
         ping: http://YOUR-FEDORA-VM-IP:3000
-```
 
 - Entertainment:
     - Jellyfin:
@@ -835,31 +1131,26 @@ This structure matches the final settings.yaml layout groups:
         ping: http://YOUR-JELLYFIN-IP:8096
 
     - Minecraft Server:
-
-```text
         icon: minecraft.png
         href: http://YOUR-MC-SERVER-IP
         description: Game server
-```
 
 - Infrastructure:
     - TrueNAS:
         icon: truenas.png
-        href: http://YOUR-TRUENAS-IP
+        href: https://YOUR-TRUENAS-IP
         description: NAS storage
         widget:
           type: truenas
-          url: http://YOUR-TRUENAS-IP
-          key: YOUR_TRUENAS_API_KEY
+          url: https://YOUR-TRUENAS-IP
+          version: 2
+          key: "{{HOMEPAGE_VAR_TRUENAS_KEY}}"
           enablePools: true
 
     - Alma Management:
-
-```text
         icon: almalinux.png
         href: http://YOUR-ALMA-IP
         description: Terraform and Ansible VM
-```
 
 - Network:
     - Technitium DNS:
@@ -874,12 +1165,9 @@ This structure matches the final settings.yaml layout groups:
         description: Tunnel and Access policies
 
     - Router:
-
-```text
         icon: router.png
         href: http://YOUR-ROUTER-IP
         description: Home router
-```
 
 - Links:
     - GitHub:
@@ -891,17 +1179,25 @@ This structure matches the final settings.yaml layout groups:
         icon: cloudflare.png
         href: https://dash.cloudflare.com
         description: DNS and domain dashboard
+```
+
+> [!CAUTION]
+> `YOUR_TOKEN_SECRET` is only a placeholder in this documentation. Never commit a real Proxmox token secret or TrueNAS API key to the repository.
 
 ---
-## 19. Optional Cloudflare Tunnel Setup
+## 21. Optional Cloudflare Tunnel Setup
 
 If exposing Homepage through the existing Ubuntu Cloudflare tunnel, add a public hostname:
 
+```text
 homepage.zaman-labs.dev
+```
 
 Point it to:
 
+```text
 http://YOUR-FEDORA-VM-IP:3000
+```
 
 Then update Homepage allowed hosts in the Fedora systemd service:
 
@@ -909,17 +1205,23 @@ Then update Homepage allowed hosts in the Fedora systemd service:
 sudo nano /etc/systemd/system/homepage.service
 ```
 
-Update the Environment line:
+Update the `Environment` line:
 
-```text
+```ini
 Environment=HOMEPAGE_ALLOWED_HOSTS=YOUR-FEDORA-VM-IP:3000,homepage.zaman-labs.dev,localhost:3000,127.0.0.1:3000
+```
+
+Keep the protected environment file line:
+
+```ini
+EnvironmentFile=/etc/homepage/homepage.env
 ```
 
 Reload and restart:
 
 ```text
 sudo systemctl daemon-reload
-sudo systemctl restart homepage
+sudo systemctl restart homepage.service
 ```
 
 Security note:
@@ -927,42 +1229,67 @@ Security note:
 Homepage should be protected if exposed publicly. Use Cloudflare Access policy or another authentication layer.
 
 ---
-## 20. Useful Commands
+## 22. Useful Commands
 
 Restart Homepage:
 
 ```text
-sudo systemctl restart homepage
+sudo systemctl restart homepage.service
 ```
 
 Start Homepage:
 
 ```text
-sudo systemctl start homepage
+sudo systemctl start homepage.service
 ```
 
 Stop Homepage:
 
 ```text
-sudo systemctl stop homepage
+sudo systemctl stop homepage.service
 ```
 
 Check status:
 
 ```text
-systemctl status homepage
+systemctl status homepage.service --no-pager
+```
+
+Check whether Homepage is active:
+
+```text
+systemctl is-active homepage.service
 ```
 
 Follow logs:
 
 ```text
-journalctl -u homepage -f
+journalctl -u homepage.service -f
 ```
 
 Show recent logs:
 
 ```text
-journalctl -u homepage -n 80 --no-pager
+journalctl -u homepage.service -n 80 --no-pager
+```
+
+Check recent TrueNAS/authentication-related messages:
+
+```text
+sudo journalctl -u homepage.service --since "5 minutes ago" --no-pager \
+  | grep -iE 'truenas|websocket|auth|error'
+```
+
+Verify the environment file permissions:
+
+```text
+sudo stat -c '%A %a %U:%G %n' /etc/homepage/homepage.env
+```
+
+Show the effective systemd unit:
+
+```text
+sudo systemctl cat homepage.service
 ```
 
 Update Homepage later:
@@ -972,11 +1299,11 @@ cd /opt/homepage/app
 sudo -u homepage git pull
 sudo -u homepage pnpm install
 sudo -u homepage pnpm build
-sudo systemctl restart homepage
+sudo systemctl restart homepage.service
 ```
 
 ---
-## 21. Final Notes
+## 23. Final Notes
 
 Homepage is the dashboard/front page.
 Uptime Kuma is still the monitoring tool.
@@ -991,72 +1318,89 @@ The dashboard now has:
 - Removed default bookmarks
 - Optional bookmark icons
 - Proxmox widget for CPU/RAM/VM/LXC info
-- TrueNAS widget for storage/pool info
+- TrueNAS v2 widget for storage/pool information
+- TrueNAS API authentication over HTTPS
+- TrueNAS API secret stored outside `services.yaml`
+- Protected `/etc/homepage/homepage.env` with mode `0600`
 - Weather and date widgets at the top
+- Optional Cloudflare Tunnel access
 
-The final settings.yaml used:
+The current TrueNAS widget security pattern is:
 
----
 ```text
+services.yaml
+    |
+    | key: "{{HOMEPAGE_VAR_TRUENAS_KEY}}"
+    v
+homepage.service
+    |
+    | EnvironmentFile=/etc/homepage/homepage.env
+    v
+HOMEPAGE_VAR_TRUENAS_KEY
+    |
+    v
+Homepage TrueNAS v2 Widget
+    |
+    | HTTPS
+    v
+TrueNAS SCALE
+```
+
+The final `settings.yaml` used:
+
+```yaml
 title: Zaman Labs
 theme: dark
 color: slate
 headerStyle: clean
 statusStyle: dot
 target: _blank
-```
 
 background:
-
-```text
   image: /images/bluehour.jpg
   blur: lg
   opacity: 65
-```
 
 cardBlur: sm
-
 hideVersion: true
 
 layout:
-
-```text
   System:
     style: row
     columns: 1
-```
 
   Monitoring:
-
-```text
     style: row
     columns: 2
-```
 
   Entertainment:
-
-```text
     style: row
     columns: 2
-```
 
   Infrastructure:
-
-```text
     style: row
     columns: 2
-```
 
   Network:
-
-```text
     style: row
     columns: 3
-```
 
   Links:
-
-```text
     style: row
     columns: 2
 ```
+
+### Current resolved TrueNAS state
+
+```text
+Homepage service:            ACTIVE
+TrueNAS widget transport:    HTTPS
+TrueNAS widget version:      2
+Environment secret loading:  WORKING
+TrueNAS authentication:      WORKING
+Recent widget errors:        NONE
+API key in services.yaml:    NO
+Secret file permissions:     0600 root:root
+```
+
+**Result: RESOLVED**
