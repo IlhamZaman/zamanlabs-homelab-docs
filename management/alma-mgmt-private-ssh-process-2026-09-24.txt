@@ -1,0 +1,106 @@
+ALMA-MGMT REMOTE SSH — VERIFIED PRIVATE-IP PROCESS
+Historical implementation record: September 19, 2026
+Compiled: September 24, 2026
+
+Scope and evidence boundary
+---------------------------
+This describes the working Cloudflare WARP private-IP route to Alma-MGMT [192.168.1.252], not the failed alma.zaman-labs.dev private-hostname approach. It reconstructs the approved sequence from the September 19 conversation, final implementation report, cleanup instructions, Auror's Journal, and the connected Marauder's Map. It does not claim a fresh live test on September 24. It is a historical process and preservation guide, not authorization to replay changes or a credential-bearing installation script.
+
+Resulting path
+--------------
+Authorized, enrolled Cloudflare One Client/WARP device
+  -> Cloudflare Gateway network policy
+  -> Cloudflare private route 192.168.1.252/32
+  -> dedicated Alma-MGMT-SSH cloudflared tunnel
+  -> Alma-MGMT OpenSSH on TCP/22
+  -> existing SSH-key authentication as izaman
+
+No client-side cloudflared, ProxyCommand, browser SSH, public SSH ingress, public A/AAAA/CNAME for alma.zaman-labs.dev, or router WAN port-forward was used. The existing Ubuntu-Gateway tunnel and its applications/routes were kept separate and unchanged. Direct LAN SSH is a separate path governed by Alma's existing SSH and firewall controls.
+
+Key identifiers and protections (historically verified)
+--------------------------------------------------------
+Alma-MGMT: 192.168.1.252; SSH TCP/22; user izaman.
+Dedicated tunnel: Alma-MGMT-SSH; tunnel ID 685cf364-ecac-477c-8304-7b2ea7f20cd7; connector on Alma-MGMT.
+Private network route: 192.168.1.252/32; route ID b6563790-652b-4a64-b667-a34be1b49e4b; type cfd_tunnel; default virtual network ID 77f0344a-f9a1-41b9-97e4-fc378c59af1b.
+Gateway protected traffic expression:
+  net.dst.ip in {192.168.1.252} and net.dst.port == 22 and net.protocol == "tcp"
+Gateway network policy precedence 100: authorized-identity ALLOW.
+Gateway network policy precedence 101: everyone-else BLOCK.
+Cloudflare One Default device profile: Split Tunnel mode Exclude.
+Ubuntu-Gateway tunnel ID 93c5b417-a237-486f-962d-8c87b8f9e706 was explicitly outside scope.
+The obsolete hostname route 75b7b2d9-b60e-4ead-85b0-19fa72f82099 was subsequently deleted; it is not part of the working path.
+
+How we reached the working setup
+--------------------------------
+1. Baseline and preserve the working estate. The original read-only audit confirmed Alma's 192.168.1.252/24 address, healthy sshd.service and TCP/22 listeners, existing key-based login, active firewalld, and no forwarding rule. Cloudflare tunnel/routes, Gateway policies, WARP profile, public DNS, and immutable Ubuntu-Gateway configuration were baselined. The separate Alma-MGMT-SSH connector and Gateway identity policies were established during the earlier hostname effort and reused by the private-IP fallback; the fallback did not loosen SSH authentication or modify Ubuntu-Gateway.
+
+2. Abandon hostname synthesis. Despite a valid private-hostname route, reconciliation, route recreation, WARP DNS at 127.0.2.2, and Gateway receiving the query, alma.zaman-labs.dev returned NXDOMAIN. We did not publish a public DNS record as a workaround. The working method uses the numeric private IP and needs no DNS synthesis.
+
+3. Preflight the fallback read-only. Confirm Alma-MGMT-SSH healthy with active connector connections, Alma sshd active, existing internal SSH-key access, no conflicting Cloudflare private network route for 192.168.1.252/32, Default WARP profile in Exclude mode with 192.168.0.0/16 excluded, and both existing Gateway identity policies enabled. Save exact private-route, WARP profile, and relevant policy snapshots with restrictive permissions for targeted rollback.
+
+4. Add exactly one Cloudflare private network route: 192.168.1.252/32 to Alma-MGMT-SSH in the default virtual network. Read it back and check the exact CIDR, tunnel ID, active state, and lack of duplicates. The recorded pre-change count was zero active private routes and zero overlapping routes; the new route became the only active overlapping route. No /24 or /16 route was added.
+
+5. Correct the WARP split tunnel without sweeping the LAN into WARP. With Exclude mode, the old 192.168.0.0/16 entry bypassed WARP for Alma too. We replaced only that one broad exclusion with the 16 non-overlapping CIDRs below, which cover the same /16 MINUS 192.168.1.252/32. Every unrelated exclusion and the Exclude mode were retained:
+
+  192.168.128.0/17
+  192.168.64.0/18
+  192.168.32.0/19
+  192.168.16.0/20
+  192.168.8.0/21
+  192.168.4.0/22
+  192.168.2.0/23
+  192.168.0.0/24
+  192.168.1.0/25
+  192.168.1.128/26
+  192.168.1.192/27
+  192.168.1.224/28
+  192.168.1.240/29
+  192.168.1.248/30
+  192.168.1.254/31
+  192.168.1.253/32
+
+The implementation mathematically verified that these CIDRs were pairwise disjoint, totaled 65,535 addresses, excluded neither 192.168.1.1 nor 192.168.1.253 from the bypass, and left exactly one address of the original 65,536-address /16 outside the exclusions: 192.168.1.252. In other words, only Alma's /32 entered WARP. The replacement was read back after application.
+
+6. Let the Default device-profile change propagate and refresh the enrolled client's WARP connection. On Durmstrang, WARP reported Connected and a healthy network. The route to Alma was observed as:
+  192.168.1.252 dev CloudflareWARP table 65743 src 100.96.0.3 uid 1000
+A representative unrelated LAN route was still local:
+  192.168.1.1 dev eno1 src 192.168.1.219 uid 1000
+This real-client routing check matters more than a Cloudflare dashboard object alone.
+
+7. Test the actual service. TCP/22 to 192.168.1.252 succeeded through WARP, then ordinary OpenSSH with the existing valid identity key connected as izaman to 192.168.1.252. An initial failed attempt pointed at a nonexistent client-side identity path; the key was never loaded in that attempt, so it did not indicate an SSH server or policy fault. Check the existing Alma host-key fingerprint before accepting a new trust entry on any client. No sshd_config, authorized_keys, SSH host keys, authentication methods, or Alma firewalld rules were changed.
+
+8. Verify the Gateway ward and preservation boundary. Gateway L4 analytics showed three matching sessions, all three on the existing precedence-100 authorized-identity ALLOW rule, none on another rule. The precedence-101 everyone-else BLOCK remained immediately after it. At completion the dedicated tunnel was healthy with four connector connections; cloudflared and sshd on Alma were active; published ingress routes on Alma numbered zero; public A/AAAA/CNAME for the failed hostname numbered zero. No router port-forward, public TCP/22 route, or Ubuntu-Gateway modification was made. Note: Alma's sshd source IP alone is not proof of the remote client's identity; use Cloudflare Gateway analytics for that decision.
+
+9. Validate a genuinely remote client. Android/Termius was subsequently tested successfully from another hotspot/network, in addition to Durmstrang. The intended MacBook path was documented, but this record does not assert a successful MacBook test.
+
+10. Clean up only the failed hostname experiment after the private-IP path was proven. The obsolete private hostname route for alma.zaman-labs.dev (ID 75b7b2d9-b60e-4ead-85b0-19fa72f82099) was deleted following an exact-object preflight and snapshot. The private /32 route, dedicated tunnel, connector, Gateway policies, and Split Tunnel configuration were preserved. There is no public DNS replacement for that hostname.
+
+Client connection instructions
+------------------------------
+Precondition: client enrolled in the same Cloudflare Zero Trust organisation, has received the Default profile, and shows WARP Connected. Use the private IP directly.
+
+OpenSSH on Durmstrang or MacBook:
+  ssh -i "/path/to/existing/private-key" izaman@192.168.1.252
+
+Android/Termius:
+  Host: 192.168.1.252
+  Port: 22
+  User: izaman
+  Authentication: existing SSH key
+
+Do not use alma.zaman-labs.dev, a client-side cloudflared ProxyCommand, or a public SSH endpoint. Do not copy Alma's downstream SSH keys to the Hermes host; Hermes's own management corridor to Alma is separate from this remote WARP client workflow.
+
+Verification and recovery for any future review
+-----------------------------------------------
+Read-only checks: inspect tunnel/connector health, exact /32 route and ID, Default profile exclusions, both Gateway policies and their precedence, Alma cloudflared/sshd, client WARP state, client routes for Alma and an unrelated LAN IP, TCP/22, real SSH with an existing key, Gateway decision logs, and absence of public SSH/DNS/port-forward. A working route object is not by itself proof of working SSH.
+
+Historical targeted Time-Turner: if introducing the /32 route or changing exclusions broke ordinary LAN routing, pulled other /16 addresses into WARP, destabilized WARP, or affected unrelated services, remove only the newly created /32 route, restore the exact prior 192.168.0.0/16 exclusion from the protected snapshot, refresh the client profile, verify recovery, and stop. If only SSH failed while unrelated routing remained correct, gather Gateway-policy and connector evidence first rather than weaken controls or broadly roll back. The historical implementation reported no rollback required.
+
+Current-state caveat: this export is based on September 19-20 verified records; before using it operationally, recheck live Cloudflare and client state. No changes to Cloudflare, Alma, or the Marauder's Map were made to produce this text.
+
+Source pointers
+---------------
+- September 19 fallback approval and final outcome in historical session @session:default/20260919_170314_2a9e3117 (user instruction near message 24034; final report near 24112; cleanup near 24113).
+- /home/izaman/.hermes/knowledge/hogwarts/AURORS-JOURNAL.md, September 19 Alma-MGMT private-IP passage.
+- /home/izaman/.hermes/skills/devops/hogwarts-marauders-map/references/hogwarts-graph.json, private-route, connector, SSH, and Gateway-policy nodes/edges.
+- Historical protected operation directory on Alma: /var/lib/cloudflared/operations/20260919T223623Z-alma-private-ip-fallback/ (not re-opened for this export).
